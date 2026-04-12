@@ -1,0 +1,37 @@
+# OIDC Configuration File
+# Copy this file to config.ini and customize with your OIDC provider settings
+# The application will look for config.ini in the same directory as the executable,
+# and also one level up in the directory hierarchy (useful for development builds)
+
+[OIDC]
+# Your OIDC provider's authorization endpoint
+# This is where the user will be redirected to log in
+AuthorizationUrl=https://auth.example.com/oauth/authorize
+
+# Your OIDC provider's token endpoint
+# Used to exchange authorization code for access tokens
+TokenUrl=https://auth.example.com/oauth/token
+
+# Your application's client ID (provided by your OIDC provider)
+ClientId=your-client-id
+
+# Your application's client secret (keep this confidential!)
+# Only used in server-to-server token exchange
+ClientSecret=your-client-secret
+
+# Redirect URI that matches your OIDC provider configuration
+# This must be registered with your provider and accessible by the user's browser
+# Common formats: http://localhost:8080/callback or https://yourdomain.com/callback
+RedirectUri=http://localhost:8080/callback
+
+# OAuth scopes to request from the provider
+# Common scopes: openid, profile, email
+Scope=openid profile email
+
+[Application]
+# Window geometry (optional)
+WindowWidth=1000
+WindowHeight=700
+
+# Local server port for handling redirects (optional)
+ListenPort=8080
