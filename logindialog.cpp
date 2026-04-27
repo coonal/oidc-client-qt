@@ -33,6 +33,10 @@ LoginDialog::LoginDialog(const OIDCConfig &config, QWidget *parent)
 
     // Load the authorization endpoint
     QUrl authUrl = m_config.getAuthorizationEndpoint();
+    // save the state
+    QUrlQuery query(authUrl);
+    m_state = query.queryItemValue("state");
+
     qDebug() << "Loading authorization URL:" << authUrl;
     m_webView->load(authUrl);
 }
@@ -76,12 +80,12 @@ void LoginDialog::parseRedirectUrl(const QUrl &url)
     // Extract authorization code
     if (query.hasQueryItem("code")) {
         m_authorizationCode = query.queryItemValue("code");
-        m_state = query.queryItemValue("state");
+        QString state = query.queryItemValue("state");
 
         qDebug() << "Authorization code received";
 
         // Verify state parameter for security
-        if (m_state.isEmpty()) {
+        if (state.isEmpty()) {
             qWarning() << "State parameter missing in callback";
             emit loginFailed("State parameter missing - possible CSRF attack");
             reject();
@@ -89,9 +93,15 @@ void LoginDialog::parseRedirectUrl(const QUrl &url)
         }
 
         // In production, verify that the state matches what we sent
-        // For now, we accept it
+        if (state != m_state) {
+            qWarning() << "State parameter mismatch";
+            emit loginFailed("State parameter mismatch - possible CSRF attack");
+            reject();
+            return;
+        }
+        m_state = state;
 
         emit loginSucceeded(m_authorizationCode, m_state);
-        accept();
+//        accept();
     }
 }

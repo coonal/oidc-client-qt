@@ -507,11 +507,111 @@ void MainWindow::onLoginSucceeded(const QString &authCode, const QString &state)
 {
     qDebug() << "Login succeeded with code:" << authCode;
     
+    // Exchange authorization code for tokens
+    exchangeAuthCodeForTokens(authCode);
+}
+
+// Exchange authorization code for tokens [NEW]
+void MainWindow::exchangeAuthCodeForTokens(const QString &authCode)
+{
+    if (!m_oidcConfig) {
+        onLoginFailed("OIDC configuration not available");
+        return;
+    }
+    
+    // Create HTTP request
+    QUrl tokenUrl(m_oidcConfig->tokenUrl());
+    QNetworkRequest request(tokenUrl);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, 
+                      "application/x-www-form-urlencoded");
+    
+    // Prepare request body
+    QByteArray body = m_oidcConfig->getTokenExchangeBody(authCode);
+    
+    // Send POST request
+    m_tokenExchangeReply = m_networkManager->post(request, body);
+    
+    // Connect response handling
+    connect(m_tokenExchangeReply, QOverload<QNetworkReply::NetworkError>::of(
+            &QNetworkReply::error),
+            this, [this](QNetworkReply::NetworkError error) {
+        qWarning() << "Token exchange error:" << error;
+        onLoginFailed("Token exchange failed");
+    });
+    
+    connect(m_tokenExchangeReply, &QNetworkReply::finished,
+            this, &MainWindow::onTokenExchangeFinished);
+}
+
+// Handle token exchange response [NEW]
+void MainWindow::onTokenExchangeFinished()
+{
+    if (!m_tokenExchangeReply) {
+        return;
+    }
+    
+    // Check for errors
+    if (m_tokenExchangeReply->error() != QNetworkReply::NoError) {
+        onLoginFailed("Token exchange failed: " + m_tokenExchangeReply->errorString());
+        m_tokenExchangeReply->deleteLater();
+        m_tokenExchangeReply = nullptr;
+        return;
+    }
+    
+    // Parse JSON response
+    QByteArray responseData = m_tokenExchangeReply->readAll();
+    QJsonDocument jsonDoc = QJsonDocument::fromJson(responseData);
+    
+    if (!jsonDoc.isObject()) {
+        onLoginFailed("Invalid token response format");
+        m_tokenExchangeReply->deleteLater();
+        m_tokenExchangeReply = nullptr;
+        return;
+    }
+    
+    QJsonObject jsonObj = jsonDoc.object();
+    
+    // Check for error in response
+    if (jsonObj.contains("error")) {
+        QString error = jsonObj.value("error").toString();
+        onLoginFailed("Token exchange failed: " + error);
+        m_tokenExchangeReply->deleteLater();
+        m_tokenExchangeReply = nullptr;
+        return;
+    }
+    
+    // Extract tokens
+    m_accessToken = jsonObj.value("access_token").toString();
+    m_refreshToken = jsonObj.value("refresh_token").toString();
+    m_idToken = jsonObj.value("id_token").toString();
+    int expiresIn = jsonObj.value("expires_in").toInt(3600);
+    
+    if (m_accessToken.isEmpty()) {
+        onLoginFailed("No access token in response");
+        m_tokenExchangeReply->deleteLater();
+        m_tokenExchangeReply = nullptr;
+        return;
+    }
+    
+    // Success!
     m_isAuthenticated = true;
     
-    // Show confirmation to user
+    qDebug() << "Tokens received successfully";
+    qDebug() << "Access token length:" << m_accessToken.length();
+    qDebug() << "Token expires in:" << expiresIn << "seconds";
+    
+    // Show success with token info
     QMessageBox::information(this, "Login Successful", 
-        QString("Authorization code received:\n%1").arg(authCode));
+        QString("Authentication successful!\n\n"
+                "Access Token: %1 chars\n"
+                "Refresh Token: %2 chars\n"
+                "Expires in: %3 seconds")
+        .arg(m_accessToken.length())
+        .arg(m_refreshToken.length())
+        .arg(expiresIn));
+    
+    m_tokenExchangeReply->deleteLater();
+    m_tokenExchangeReply = nullptr;
     
     grantApplicationAccess();
 }
@@ -531,11 +631,19 @@ void MainWindow::onLoginFailed(const QString &error)
 // Post-authentication setup
 void MainWindow::grantApplicationAccess()
 {
+    // Tokens are now available:
+    // - m_accessToken: Use for API requests
+    // - m_refreshToken: Use to refresh tokens
+    // - m_idToken: Contains user identity information
+    
+    qDebug() << "Application access granted";
+    qDebug() << "Access token ready for API requests";
+    
     // TODO: Additional setup after successful auth
-    // - Fetch user profile
+    // - Fetch user profile using access token
     // - Load user preferences
     // - Initialize authenticated features
-    qDebug() << "Application access granted";
+    // - Set up token refresh timer if needed
 }
 ```
 
@@ -573,23 +681,91 @@ RedirectUri=http://localhost:9090/callback
 // then update config.ini
 ```
 
-### Implementing Token Exchange (Future)
+### Using Access Tokens for API Requests
 
 ```cpp
-// Future enhancement - in onLoginSucceeded():
-void MainWindow::exchangeCodeForTokens(const QString &authCode)
+// After successful authentication, use m_accessToken for API calls
+
+void MainWindow::makeAuthenticatedRequest(const QString &apiUrl)
 {
-    // 1. Create HTTP request to token endpoint
-    QNetworkRequest request(QUrl(m_oidcConfig->tokenUrl()));
-    request.setHeader(QNetworkRequest::ContentTypeHeader, 
-                     "application/x-www-form-urlencoded");
+    // 1. Create network request
+    QNetworkRequest request(QUrl(apiUrl));
     
-    // 2. Prepare POST data
+    // 2. Add Authorization header with Bearer token
+    QString authHeader = QString("Bearer %1").arg(m_accessToken);
+    request.setRawHeader("Authorization", authHeader.toUtf8());
+    
+    // 3. Make the request
+    QNetworkReply *reply = m_networkManager->get(request);
+    
+    // 4. Handle response
+    connect(reply, &QNetworkReply::finished, [reply]() {
+        if (reply->error() == QNetworkReply::NoError) {
+            QByteArray responseData = reply->readAll();
+            qDebug() << "API Response:" << responseData;
+        } else {
+            qWarning() << "API request failed:" << reply->errorString();
+        }
+        reply->deleteLater();
+    });
+}
+
+// Example usage:
+// makeAuthenticatedRequest("https://api.example.com/user/profile");
+```
+
+### Token Refresh Implementation
+
+```cpp
+// Use refresh_token to get a new access_token before expiry
+
+void MainWindow::refreshAccessToken()
+{
+    if (m_refreshToken.isEmpty()) {
+        qWarning() << "No refresh token available";
+        return;
+    }
+    
+    // Create token refresh request
+    QUrl tokenUrl(m_oidcConfig->tokenUrl());
+    QNetworkRequest request(tokenUrl);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, 
+                      "application/x-www-form-urlencoded");
+    
+    // Prepare request body
     QUrlQuery postData;
-    postData.addQueryItem("grant_type", "authorization_code");
-    postData.addQueryItem("code", authCode);
+    postData.addQueryItem("grant_type", "refresh_token");
+    postData.addQueryItem("refresh_token", m_refreshToken);
     postData.addQueryItem("client_id", m_oidcConfig->clientId());
     postData.addQueryItem("client_secret", m_oidcConfig->clientSecret());
+    
+    // Send request
+    QNetworkReply *reply = m_networkManager->post(request, postData.toString().toUtf8());
+    
+    // Handle response (similar to token exchange)
+    connect(reply, &QNetworkReply::finished, [this, reply]() {
+        // Parse response and update m_accessToken
+        reply->deleteLater();
+    });
+}
+```
+
+### Token Exchange Implementation (✓ Implemented)
+
+Token exchange is now automatically performed after successful login:
+
+```cpp
+// Flow:
+// 1. User authenticates in LoginDialog → onLoginSucceeded() called
+// 2. exchangeAuthCodeForTokens() sends POST to token endpoint
+// 3. onTokenExchangeFinished() parses response and stores tokens
+// 4. Tokens available in m_accessToken, m_refreshToken, m_idToken
+
+// To use tokens after authentication:
+// - Access Token: For API requests (Authorization: Bearer header)
+// - Refresh Token: To get new access token when expired
+// - ID Token: Contains user profile information (if OpenID Connect)
+```
     postData.addQueryItem("redirect_uri", m_oidcConfig->redirectUri());
     
     // 3. Send request (requires QNetworkAccessManager)

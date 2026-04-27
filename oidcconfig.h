@@ -29,6 +29,9 @@ public:
     
     // Generate a random state parameter for security
     static QString generateState();
+    
+    // Prepare token exchange request data
+    QByteArray getTokenExchangeBody(const QString &authCode) const;
 
 private:
     QString m_authorizationUrl;
