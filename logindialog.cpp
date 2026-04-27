@@ -14,10 +14,10 @@ LoginDialog::LoginDialog(const OIDCConfig &config, QWidget *parent)
     setGeometry(100, 100, 800, 600);
 
     // Create web view
-    m_webView = std::make_unique<QWebEngineView>();
+    m_webView = std::unique_ptr<QWebEngineView>(new QWebEngineView);
 
     // Connect signals
-    connect(m_webView.get(), &QWebEngineView::urlChanged, 
+    connect(m_webView.get(), &QWebEngineView::urlChanged,
             this, &LoginDialog::onUrlChanged);
     connect(m_webView.get(), QOverload<bool>::of(&QWebEngineView::loadFinished),
             this, &LoginDialog::onLoadFinished);
@@ -44,7 +44,7 @@ LoginDialog::~LoginDialog()
 void LoginDialog::onUrlChanged(const QUrl &url)
 {
     qDebug() << "URL changed to:" << url;
-    
+
     // Check if this is a redirect back to our redirect_uri
     if (url.toString().startsWith(m_config.redirectUri())) {
         parseRedirectUrl(url);
@@ -62,7 +62,7 @@ void LoginDialog::onLoadFinished(bool success)
 void LoginDialog::parseRedirectUrl(const QUrl &url)
 {
     QUrlQuery query(url);
-    
+
     // Check for error response
     if (query.hasQueryItem("error")) {
         QString error = query.queryItemValue("error");
@@ -72,14 +72,14 @@ void LoginDialog::parseRedirectUrl(const QUrl &url)
         reject();
         return;
     }
-    
+
     // Extract authorization code
     if (query.hasQueryItem("code")) {
         m_authorizationCode = query.queryItemValue("code");
         m_state = query.queryItemValue("state");
-        
+
         qDebug() << "Authorization code received";
-        
+
         // Verify state parameter for security
         if (m_state.isEmpty()) {
             qWarning() << "State parameter missing in callback";
@@ -87,10 +87,10 @@ void LoginDialog::parseRedirectUrl(const QUrl &url)
             reject();
             return;
         }
-        
+
         // In production, verify that the state matches what we sent
         // For now, we accept it
-        
+
         emit loginSucceeded(m_authorizationCode, m_state);
         accept();
     }
