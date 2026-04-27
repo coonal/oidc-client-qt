@@ -197,27 +197,36 @@ void loginFailed(const QString &error)
 - Load OIDC configuration from file or defaults
 - Orchestrate login flow on application startup
 - Handle successful/failed authentication responses
+- **Exchange authorization code for tokens** (NEW)
+- Parse token response and store tokens
 - Control application access based on authentication state
 - Manage main application UI
 
 **Key Methods**:
 ```cpp
-void initializeOIDCConfig()      // Config initialization
-bool loadConfigFromFile()        // Load from config.ini
-void showLoginDialog()            // Start login flow
-void onLoginSucceeded(...)        // Handle success
-void onLoginFailed(...)           // Handle failure
-void grantApplicationAccess()    // Post-auth setup
+void initializeOIDCConfig()           // Config initialization
+bool loadConfigFromFile()             // Load from config.ini
+void showLoginDialog()                // Start login flow
+void onLoginSucceeded(...)            // Handle success
+void exchangeAuthCodeForTokens(...)   // NEW: Token exchange
+void onTokenExchangeFinished()        // NEW: Handle token response
+void onLoginFailed(...)               // Handle failure
+void grantApplicationAccess()         // Post-auth setup
 ```
 
 **State Variables**:
 ```cpp
-bool m_isAuthenticated           // Authentication status
-bool m_loginAttempted            // Prevent re-showing dialog
-std::unique_ptr<OIDCConfig> m_oidcConfig  // Config holder
+bool m_isAuthenticated               // Authentication status
+bool m_loginAttempted                // Prevent re-showing dialog
+std::unique_ptr<OIDCConfig> m_oidcConfig        // Config holder
+std::unique_ptr<QNetworkAccessManager> m_networkManager // NEW: HTTP
+QNetworkReply *m_tokenExchangeReply              // NEW: Token request
+QString m_accessToken                // NEW: Access token from provider
+QString m_refreshToken               // NEW: Refresh token from provider
+QString m_idToken                    // NEW: ID token from provider
 ```
 
-**Dependencies**: Qt Widgets, OIDCConfig, LoginDialog, oidcconfig.h
+**Dependencies**: Qt Widgets, Qt Network, Qt JSON, OIDCConfig, LoginDialog
 
 ---
 
@@ -353,12 +362,42 @@ onUrlChanged() slot triggered
         ▼
     onLoginSucceeded() in MainWindow
         │
+        ├─► exchangeAuthCodeForTokens(authCode) [NEW]
+        │   │
+        │   ├─► Create QNetworkRequest to token endpoint
+        │   │
+        │   ├─► Build request body:
+        │   │   ├─ grant_type=authorization_code
+        │   │   ├─ code=<auth_code>
+        │   │   ├─ redirect_uri=...
+        │   │   ├─ client_id=...
+        │   │   └─ client_secret=...
+        │   │
+        │   ├─► POST request to token endpoint
+        │   │
+        │   └─► Connect finished() signal → onTokenExchangeFinished()
+        │
+        ▼
+    [Token Endpoint Validates & Issues Tokens]
+        │
+        ▼
+    onTokenExchangeFinished() [NEW]
+        │
+        ├─► Check network errors
+        │
+        ├─► Parse JSON response
+        │
+        ├─► Extract tokens:
+        │   ├─ m_accessToken
+        │   ├─ m_refreshToken
+        │   └─ m_idToken
+        │
         ├─► m_isAuthenticated = true
         │
-        ├─► QMessageBox::information() [User feedback]
+        ├─► QMessageBox::information() [Show token info]
         │
         ├─► grantApplicationAccess()
-        │   └─► [Future: Token exchange, user data loading]
+        │   └─► [Application ready with tokens]
         │
         └─► Dialog closes, application continues
 ```
@@ -426,6 +465,14 @@ QMainWindow                    QDialog
         │ + setters/getters      │
         │ + getAuthEndpoint()    │
         │ + generateState()      │
+        │ + getTokenExchangeBody() [NEW] │
+        └────────────────────────┘
+
+        ┌────────────────────────┐
+        │ QNetworkAccessManager  │ [NEW]
+        │                        │
+        │ Manages HTTP requests  │
+        │ for token exchange     │
         └────────────────────────┘
 ```
 
@@ -448,6 +495,79 @@ LoginDialog::loginSucceeded signal
     
 LoginDialog::loginFailed signal 
     → MainWindow::onLoginFailed() slot
+```
+
+---
+
+## Token Exchange Architecture
+
+### Token Exchange Flow
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  MainWindow::onLoginSucceeded()                             │
+│  (Authorization code received from OIDC Provider)           │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│  MainWindow::exchangeAuthCodeForTokens()                    │
+│  - Create QNetworkRequest to token endpoint                 │
+│  - Build request body with authorization code              │
+│  - Set Content-Type: application/x-www-form-urlencoded    │
+│  - Send POST request                                        │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Token Endpoint (OIDC Provider)                             │
+│  - Validates authorization code                            │
+│  - Verifies client credentials                             │
+│  - Issues tokens                                            │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│  MainWindow::onTokenExchangeFinished()                      │
+│  - Parse JSON response                                      │
+│  - Extract access_token, refresh_token, id_token           │
+│  - Validate response for errors                            │
+│  - Store tokens in member variables                        │
+│  - Display success message with token info                 │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│  MainWindow::grantApplicationAccess()                       │
+│  - Grant user access to protected resources                │
+│  - Application ready to use tokens for API requests        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Token Request Structure
+
+```
+POST /token HTTP/1.1
+Host: oidc-provider.example.com
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code&
+code=<AUTHORIZATION_CODE>&
+redirect_uri=http://localhost:8080/callback&
+client_id=<CLIENT_ID>&
+client_secret=<CLIENT_SECRET>
+```
+
+### Token Response Structure
+
+```json
+{
+  "access_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "refresh_token": "def50200...",
+  "id_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
 ```
 
 ---

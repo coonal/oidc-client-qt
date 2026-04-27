@@ -10,6 +10,12 @@
 #include <QSettings>
 #include <QFileInfo>
 #include <QCoreApplication>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QUrl>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -21,6 +27,9 @@ MainWindow::MainWindow(QWidget *parent)
     
     // Initialize OIDC configuration
     initializeOIDCConfig();
+    
+    // Initialize network manager for token exchange
+    m_networkManager = std::make_unique<QNetworkAccessManager>(this);
     
     // Setup main window UI for authenticated users
     QWidget *centralWidget = new QWidget(this);
@@ -160,18 +169,8 @@ void MainWindow::onLoginSucceeded(const QString &authCode, const QString &state)
 {
     qDebug() << "Login succeeded with auth code:" << authCode;
     
-    m_isAuthenticated = true;
-    
-    // Display success message
-    QMessageBox::information(this, "Login Successful", 
-        QString("Authorization code received.\n\n"
-                "In a production application, you would now:\n"
-                "1. Exchange this authorization code for tokens via the token endpoint\n"
-                "2. Store the access and refresh tokens securely\n"
-                "3. Use the access token for API requests\n\n"
-                "Auth Code: %1").arg(authCode));
-    
-    grantApplicationAccess();
+    // Exchange the authorization code for tokens
+    exchangeAuthCodeForTokens(authCode);
 }
 
 void MainWindow::onLoginFailed(const QString &error)
@@ -184,9 +183,129 @@ void MainWindow::onLoginFailed(const QString &error)
     close();
 }
 
+void MainWindow::exchangeAuthCodeForTokens(const QString &authCode)
+{
+    if (!m_oidcConfig) {
+        onLoginFailed("OIDC configuration not available");
+        return;
+    }
+    
+    qDebug() << "Exchanging authorization code for tokens...";
+    
+    // Create POST request to token endpoint
+    QUrl tokenUrl(m_oidcConfig->tokenUrl());
+    QNetworkRequest request(tokenUrl);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/x-www-form-urlencoded");
+    
+    // Prepare request body with auth code, client id, and secret
+    QByteArray body = m_oidcConfig->getTokenExchangeBody(authCode);
+    
+    qDebug() << "Token URL:" << m_oidcConfig->tokenUrl();
+    qDebug() << "Sending token exchange request...";
+    
+    // Send POST request
+    m_tokenExchangeReply = m_networkManager->post(request, body);
+    
+    // Connect signals for response handling
+    connect(m_tokenExchangeReply, QOverload<QNetworkReply::NetworkError>::of(&QNetworkReply::error),
+            this, [this](QNetworkReply::NetworkError error) {
+        qWarning() << "Token exchange error:" << error;
+        qWarning() << "Response:" << m_tokenExchangeReply->errorString();
+        onLoginFailed("Token exchange failed: " + m_tokenExchangeReply->errorString());
+    });
+    
+    connect(m_tokenExchangeReply, &QNetworkReply::finished,
+            this, &MainWindow::onTokenExchangeFinished);
+}
+
+void MainWindow::onTokenExchangeFinished()
+{
+    if (!m_tokenExchangeReply) {
+        return;
+    }
+    
+    // Check for network errors
+    if (m_tokenExchangeReply->error() != QNetworkReply::NoError) {
+        qWarning() << "Token exchange failed:" << m_tokenExchangeReply->errorString();
+        onLoginFailed("Token exchange failed: " + m_tokenExchangeReply->errorString());
+        m_tokenExchangeReply->deleteLater();
+        m_tokenExchangeReply = nullptr;
+        return;
+    }
+    
+    // Parse JSON response
+    QByteArray responseData = m_tokenExchangeReply->readAll();
+    qDebug() << "Token response received";
+    
+    QJsonDocument jsonDoc = QJsonDocument::fromJson(responseData);
+    if (!jsonDoc.isObject()) {
+        qWarning() << "Invalid token response format";
+        onLoginFailed("Invalid token response format");
+        m_tokenExchangeReply->deleteLater();
+        m_tokenExchangeReply = nullptr;
+        return;
+    }
+    
+    QJsonObject jsonObj = jsonDoc.object();
+    
+    // Check for error in response
+    if (jsonObj.contains("error")) {
+        QString error = jsonObj.value("error").toString();
+        QString errorDescription = jsonObj.value("error_description").toString();
+        qWarning() << "Token endpoint error:" << error << "-" << errorDescription;
+        onLoginFailed(QString("Token exchange failed: %1").arg(
+            errorDescription.isEmpty() ? error : errorDescription));
+        m_tokenExchangeReply->deleteLater();
+        m_tokenExchangeReply = nullptr;
+        return;
+    }
+    
+    // Extract tokens from response
+    if (!jsonObj.contains("access_token")) {
+        qWarning() << "No access token in response";
+        onLoginFailed("No access token in token response");
+        m_tokenExchangeReply->deleteLater();
+        m_tokenExchangeReply = nullptr;
+        return;
+    }
+    
+    m_accessToken = jsonObj.value("access_token").toString();
+    m_refreshToken = jsonObj.value("refresh_token").toString();
+    m_idToken = jsonObj.value("id_token").toString();
+    
+    int expiresIn = jsonObj.value("expires_in").toInt(3600); // Default to 1 hour
+    
+    qDebug() << "Tokens received successfully";
+    qDebug() << "  Access Token: [" << m_accessToken.length() << "chars]";
+    qDebug() << "  Refresh Token: [" << m_refreshToken.length() << "chars]";
+    qDebug() << "  ID Token: [" << m_idToken.length() << "chars]";
+    qDebug() << "  Expires in:" << expiresIn << "seconds";
+    
+    m_isAuthenticated = true;
+    
+    // Display success message
+    QMessageBox::information(this, "Login Successful", 
+        QString("Authentication successful!\n\n"
+                "Tokens received:\n"
+                "- Access Token: %1 chars\n"
+                "- Refresh Token: %2 chars\n"
+                "- ID Token: %3 chars\n"
+                "- Expires in: %4 seconds\n\n"
+                "You can now use the access token for API requests.").arg(
+                    m_accessToken.length(),
+                    m_refreshToken.length(),
+                    m_idToken.length(),
+                    expiresIn));
+    
+    m_tokenExchangeReply->deleteLater();
+    m_tokenExchangeReply = nullptr;
+    
+    grantApplicationAccess();
+}
+
 void MainWindow::grantApplicationAccess()
 {
-    // This method is called after successful authentication
+    // This method is called after successful authentication and token exchange
     // You can perform additional setup here, such as:
     // - Fetching user profile information
     // - Loading user preferences
@@ -196,5 +315,6 @@ void MainWindow::grantApplicationAccess()
     
     // The main window is already visible at this point
     // The UI was already set up in the constructor
+    // Tokens are stored in m_accessToken, m_refreshToken, and m_idToken
 }
 

@@ -27,6 +27,8 @@ The OIDC login system consists of these components:
 ### 3. **MainWindow** (Updated)
 - Shows login dialog automatically on application startup
 - Handles successful/failed login responses
+- **Exchanges authorization code for tokens** (NEW)
+- Parses token response and stores tokens securely
 - Grants application access after successful authentication
 - Sets up main UI for authenticated users
 
@@ -101,27 +103,70 @@ libxi-dev libxtst-dev libxrandr-dev libfontconfig1-dev libxss-dev libpci-dev
 6. **Token Exchange**: Application should exchange the code for tokens (implementation-dependent on backend)
 7. **Access Granted**: User gains access to the application
 
-## Next Steps - Token Exchange
+## Token Exchange Implementation (✓ Completed)
 
-After receiving the authorization code, you need to:
+The authorization code is now automatically exchanged for tokens after successful login.
 
-1. **Exchange Code for Tokens** (in `mainwindow.cpp`'s `onLoginSucceeded`):
+### Implementation Details
+
+**Flow**:
+1. User completes login → `onLoginSucceeded()` is called with authorization code
+2. `exchangeAuthCodeForTokens()` sends POST request to token endpoint
+3. Token endpoint returns access_token, refresh_token, and id_token
+4. Tokens are parsed and stored in member variables
+5. Success message displays token information
+6. `grantApplicationAccess()` is called to proceed with application
+
+**Token Exchange Request** (`OIDCConfig::getTokenExchangeBody()`):
+```cpp
+// POST to token endpoint with form data:
+grant_type=authorization_code
+code=<authorization_code>
+redirect_uri=<redirect_uri>
+client_id=<client_id>
+client_secret=<client_secret>
+```
+
+**Token Exchange Response**:
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refresh_token": "abc123def456...",
+  "id_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "Bearer",
+  "expires_in": 3600
+}
+```
+
+**Tokens Stored In**:
+- `MainWindow::m_accessToken` - For API requests
+- `MainWindow::m_refreshToken` - For token renewal
+- `MainWindow::m_idToken` - Contains user identity information
+
+### Next Steps
+
+1. **Use Access Token for API Requests**:
    ```cpp
-   // Send authorization code to token endpoint
-   // Receive access_token, id_token, refresh_token
-   // Store tokens securely
+   QNetworkRequest request(apiUrl);
+   request.setRawHeader("Authorization", 
+       QString("Bearer %1").arg(m_accessToken).toUtf8());
+   m_networkManager->get(request);
    ```
 
-2. **Use Access Token for API Requests**:
-   ```cpp
-   // Add Authorization header: "Bearer <access_token>"
-   // Make API requests to protected resources
-   ```
+2. **Secure Token Storage**:
+   - Implement secure storage using OS keychain
+   - Never log tokens to console in production
+   - Encrypt tokens if storing to disk
 
-3. **Secure Token Storage**:
-   - Store tokens in secure storage (OS keychain)
-   - Implement token refresh logic
-   - Add logout functionality
+3. **Token Refresh**:
+   - Monitor token expiration (expires_in field)
+   - Use refresh_token to obtain new access_token before expiry
+   - Implement automatic refresh logic
+
+4. **Logout Functionality**:
+   - Send token revocation request to provider
+   - Clear stored tokens
+   - Close application or show login dialog again
 
 ## Security Considerations
 
@@ -145,9 +190,14 @@ After receiving the authorization code, you need to:
 OIDCConfig config;
 config.setAuthorizationUrl("...");
 config.setClientId("...");
+config.setTokenUrl("...");
+config.setClientSecret("...");
 
 // Get authorization URL
 QUrl authUrl = config.getAuthorizationEndpoint();
+
+// Prepare token exchange request body
+QByteArray tokenBody = config.getTokenExchangeBody(authCode);
 ```
 
 ### LoginDialog

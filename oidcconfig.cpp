@@ -56,3 +56,15 @@ QString OIDCConfig::generateState()
 {
     return QUuid::createUuid().toString();
 }
+
+QByteArray OIDCConfig::getTokenExchangeBody(const QString &authCode) const
+{
+    QUrlQuery query;
+    query.addQueryItem("grant_type", "authorization_code");
+    query.addQueryItem("code", authCode);
+    query.addQueryItem("redirect_uri", m_redirectUri);
+    query.addQueryItem("client_id", m_clientId);
+    query.addQueryItem("client_secret", m_clientSecret);
+    
+    return query.toString(QUrl::FullyEncoded).toUtf8();
+}

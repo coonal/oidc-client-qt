@@ -11,6 +11,8 @@ namespace Ui {
 QT_END_NAMESPACE
 
 class LoginDialog;
+class QNetworkAccessManager;
+class QNetworkReply;
 
 class MainWindow : public QMainWindow
 {
@@ -26,15 +28,22 @@ protected:
 private slots:
     void onLoginSucceeded(const QString &authCode, const QString &state);
     void onLoginFailed(const QString &error);
+    void onTokenExchangeFinished();
 
 private:
     void initializeOIDCConfig();
     bool loadConfigFromFile();
     void showLoginDialog();
     void grantApplicationAccess();
+    void exchangeAuthCodeForTokens(const QString &authCode);
 
     Ui::MainWindow *ui;
     std::unique_ptr<OIDCConfig> m_oidcConfig;
+    std::unique_ptr<QNetworkAccessManager> m_networkManager;
+    QNetworkReply *m_tokenExchangeReply = nullptr;
     bool m_isAuthenticated = false;
     bool m_loginAttempted = false;
+    QString m_accessToken;
+    QString m_refreshToken;
+    QString m_idToken;
 };
