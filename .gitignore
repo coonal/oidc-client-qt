@@ -80,3 +80,9 @@ CMakeLists.txt.user*
 .rcc/
 .uic/
 /build*/
+
+# VS Code generated
+.vscode/
+
+# Real config files
+config.ini

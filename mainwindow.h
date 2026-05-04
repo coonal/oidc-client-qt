@@ -31,6 +31,8 @@ private:
     void initializeOIDCConfig();
     bool loadConfigFromFile();
     void showLoginDialog();
+    void showSimpleLoginDialog();
+    void showAuthCodeDialog();
     void grantApplicationAccess();
 
     Ui::MainWindow *ui;

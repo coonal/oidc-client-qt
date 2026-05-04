@@ -1,6 +1,8 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "logindialog.h"
+#include "simplelogindialog.h"
+#include "authcodedialog.h"
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QDebug>
@@ -44,7 +46,7 @@ void MainWindow::showEvent(QShowEvent *event)
     // Show login dialog on first show if not already attempted
     if (!m_loginAttempted) {
         m_loginAttempted = true;
-        QTimer::singleShot(0, this, &MainWindow::showLoginDialog);
+        QTimer::singleShot(0, this, &MainWindow::showSimpleLoginDialog);
     }
     QMainWindow::showEvent(event);
 }
@@ -182,6 +184,76 @@ void MainWindow::onLoginFailed(const QString &error)
         QString("Authentication failed:\n%1").arg(error));
     
     close();
+}
+
+void MainWindow::showSimpleLoginDialog()
+{
+    if (!m_oidcConfig) {
+        QMessageBox::critical(this, "Configuration Error", 
+                            "OIDC configuration not initialized");
+        return;
+    }
+    
+    qDebug() << "Showing simple login dialog";
+    
+    SimpleLoginDialog loginDialog(*m_oidcConfig, this);
+    
+    // Connect signals - note: this uses access token instead of auth code
+    connect(&loginDialog, &SimpleLoginDialog::loginSucceeded,
+            [this](const QString &accessToken) {
+                m_isAuthenticated = true;
+                qDebug() << "Login succeeded with access token";
+                
+                QMessageBox::information(this, "Login Successful", 
+                    "Authentication successful!\n\n"
+                    "Access token received and ready for use.");
+                
+                grantApplicationAccess();
+            });
+    
+    connect(&loginDialog, &SimpleLoginDialog::loginFailed,
+            this, &MainWindow::onLoginFailed);
+    
+    int result = loginDialog.exec();
+    if (result != QDialog::Accepted && !m_isAuthenticated) {
+        qDebug() << "Login failed or cancelled";
+        close();
+    }
+}
+
+void MainWindow::showAuthCodeDialog()
+{
+    if (!m_oidcConfig) {
+        QMessageBox::critical(this, "Configuration Error", 
+                            "OIDC configuration not initialized");
+        return;
+    }
+    
+    qDebug() << "Showing authorization code dialog";
+    
+    AuthCodeDialog loginDialog(*m_oidcConfig, this);
+    
+    // Connect signals
+    connect(&loginDialog, &AuthCodeDialog::loginSucceeded,
+            [this](const QString &accessToken) {
+                m_isAuthenticated = true;
+                qDebug() << "Login succeeded with authorization code flow";
+                
+                QMessageBox::information(this, "Login Successful", 
+                    "Authentication successful!\n\n"
+                    "Access token received and ready for use.");
+                
+                grantApplicationAccess();
+            });
+    
+    connect(&loginDialog, &AuthCodeDialog::loginFailed,
+            this, &MainWindow::onLoginFailed);
+    
+    int result = loginDialog.exec();
+    if (result != QDialog::Accepted && !m_isAuthenticated) {
+        qDebug() << "Login failed or cancelled";
+        close();
+    }
 }
 
 void MainWindow::grantApplicationAccess()
