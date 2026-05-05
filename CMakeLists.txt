@@ -24,6 +24,10 @@ set(PROJECT_SOURCES
     oidcconfig.h
     logindialog.cpp
     logindialog.h
+    simplelogindialog.cpp
+    simplelogindialog.h
+    authcodedialog.cpp
+    authcodedialog.h
 )
 
 add_executable(oidc-client-qt

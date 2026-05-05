@@ -162,7 +162,7 @@ QString authorizationUrl() const   // Configuration getters
 ---
 
 #### **LoginDialog**
-**Purpose**: Display OIDC login interface using web browser
+**Purpose**: Display OIDC login interface using QWebEngineView browser
 
 **Responsibilities**:
 - Create and display modal dialog with web engine
@@ -186,7 +186,106 @@ void loginSucceeded(const QString &authCode, const QString &state)
 void loginFailed(const QString &error)
 ```
 
+**Authentication Flow**: OAuth2 Authorization Code Flow with automatic browser rendering
+
 **Dependencies**: Qt WebEngineWidgets, OIDCConfig
+
+**Limitations**: 
+- GPU rendering issues in WSL 2 (use SimpleLoginDialog or AuthCodeDialog instead)
+- Requires QWebEngineView which has significant system dependencies
+
+---
+
+#### **SimpleLoginDialog**
+**Purpose**: Direct username/password authentication using Resource Owner Password Credentials flow
+
+**Responsibilities**:
+- Display username and password input fields
+- Validate user input
+- Send credentials directly to token endpoint
+- Handle token response parsing
+- Emit signals for success/failure
+- Manage SSL errors for WSL 2 compatibility
+
+**Key Methods**:
+```cpp
+void onLoginClicked()                   // Handle login button
+void authenticateWithCredentials(...)   // Direct auth to token endpoint
+void onTokenResponseFinished()          // Parse token response
+QString getAccessToken() const          // Retrieve access token
+```
+
+**Signals**:
+```cpp
+void loginSucceeded(const QString &accessToken)
+void loginFailed(const QString &error)
+```
+
+**Authentication Flow**: OAuth2 Resource Owner Password Credentials (password grant)
+
+**Dependencies**: Qt Network, Qt Core (JSON parsing), OIDCConfig
+
+**WSL 2 Optimizations**:
+- Disables SSL certificate verification for development
+- Handles SSL errors with `ignoreSslErrors()`
+- No GPU/rendering requirements
+
+**Note**: Returns `400 unsupported_grant_type` if provider doesn't support password grant flow.
+
+---
+
+#### **AuthCodeDialog**
+**Purpose**: OAuth2 Authorization Code flow with manual code entry (browser + manual copy-paste)
+
+**Responsibilities**:
+- Generate and display authorization URL
+- Copy auth URL to clipboard for easy access
+- Open browser for user authorization
+- Accept manual code entry from user
+- Exchange code for tokens
+- Emit signals for success/failure
+- Manage SSL errors for WSL 2 compatibility
+
+**Key Methods**:
+```cpp
+void onOpenBrowserClicked()             // Open auth URL in default browser
+void copyAuthUrlToClipboard()           // Copy URL for manual access
+void onExchangeCodeClicked()            // Submit code for exchange
+void exchangeAuthorizationCode(...)     // Exchange code via token endpoint
+QString getAccessToken() const          // Retrieve access token
+```
+
+**Signals**:
+```cpp
+void loginSucceeded(const QString &accessToken)
+void loginFailed(const QString &error)
+```
+
+**Authentication Flow**: OAuth2 Authorization Code Flow with manual redirect handling
+
+**Dependencies**: Qt Network, Qt Core (JSON parsing), Qt Gui (Desktop Services), OIDCConfig
+
+**User Workflow**:
+1. Dialog displays authorization URL
+2. URL is automatically copied to clipboard
+3. User clicks "Open in Browser" to visit the URL
+4. User authenticates with OIDC provider
+5. Browser redirects to redirect_uri with code parameter
+6. User copies code from URL or callback page
+7. User pastes code in dialog and clicks "Exchange Code"
+8. Dialog exchanges code for access tokens
+9. On success, emits loginSucceeded signal
+
+**WSL 2 Optimizations**:
+- No QWebEngineView (no rendering required)
+- Disables SSL certificate verification for development
+- Uses system default browser
+
+**Advantages**:
+- Works with all OIDC providers supporting Authorization Code flow
+- Compatible with WSL 2 (no rendering issues)
+- Most secure for native applications
+- No special system dependencies
 
 ---
 
@@ -204,29 +303,24 @@ void loginFailed(const QString &error)
 
 **Key Methods**:
 ```cpp
-void initializeOIDCConfig()           // Config initialization
-bool loadConfigFromFile()             // Load from config.ini
-void showLoginDialog()                // Start login flow
-void onLoginSucceeded(...)            // Handle success
+void initializeOIDCConfig()       // Config initialization
+bool loadConfigFromFile()         // Load from config.ini
+void showLoginDialog()            // Start login flow with QWebEngineView
+void showSimpleLoginDialog()      // Start login flow with username/password
+void showAuthCodeDialog()         // Start login flow with manual code entry
+void onLoginSucceeded(...)        // Handle success
 void exchangeAuthCodeForTokens(...)   // NEW: Token exchange
 void onTokenExchangeFinished()        // NEW: Handle token response
-void onLoginFailed(...)               // Handle failure
-void grantApplicationAccess()         // Post-auth setup
+void onLoginFailed(...)           // Handle failure
+void grantApplicationAccess()     // Post-auth setup
 ```
 
-**State Variables**:
-```cpp
-bool m_isAuthenticated               // Authentication status
-bool m_loginAttempted                // Prevent re-showing dialog
-std::unique_ptr<OIDCConfig> m_oidcConfig        // Config holder
-std::unique_ptr<QNetworkAccessManager> m_networkManager // NEW: HTTP
-QNetworkReply *m_tokenExchangeReply              // NEW: Token request
-QString m_accessToken                // NEW: Access token from provider
-QString m_refreshToken               // NEW: Refresh token from provider
-QString m_idToken                    // NEW: ID token from provider
-```
+**Available Login Methods**:
+1. **showLoginDialog()** - Uses QWebEngineView (not recommended for WSL 2)
+2. **showSimpleLoginDialog()** - Direct username/password (requires password grant support)
+3. **showAuthCodeDialog()** - Browser + manual code entry (recommended for WSL 2)
 
-**Dependencies**: Qt Widgets, Qt Network, Qt JSON, OIDCConfig, LoginDialog
+**Dependencies**: Qt Widgets, OIDCConfig, LoginDialog, SimpleLoginDialog, AuthCodeDialog, Qt Network, Qt JSON
 
 ---
 
@@ -1051,7 +1145,11 @@ oidc-client-qt/
 │
 ├── mainwindow.h / cpp               # Main application window
 ├── oidcconfig.h / cpp               # OIDC configuration
-├── logindialog.h / cpp              # Login dialog UI
+│
+├── logindialog.h / cpp              # Login dialog with QWebEngineView
+├── simplelogindialog.h / cpp        # Login dialog with username/password
+├── authcodedialog.h / cpp           # Login dialog with browser + code entry
+│
 ├── mainwindow.ui                    # Qt Designer UI file (optional)
 │
 ├── config.ini                       # Runtime configuration
@@ -1061,6 +1159,7 @@ oidc-client-qt/
 │
 ├── OIDC_IMPLEMENTATION.md           # Implementation guide
 ├── ARCHITECTURE.md                  # This file
+├── DEVELOPER_GUIDE.md               # Developer reference
 │
 ├── build/                           # CMake build directory
 │   ├── oidc-client-qt              # Executable

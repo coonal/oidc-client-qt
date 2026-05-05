@@ -34,6 +34,8 @@ private:
     void initializeOIDCConfig();
     bool loadConfigFromFile();
     void showLoginDialog();
+    void showSimpleLoginDialog();
+    void showAuthCodeDialog();
     void grantApplicationAccess();
     void exchangeAuthCodeForTokens(const QString &authCode);
 
