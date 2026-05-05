@@ -48,6 +48,8 @@ The OIDC login system consists of these components:
 ### 5. **MainWindow** (Updated)
 - Shows appropriate login dialog automatically on application startup
 - Handles successful/failed login responses
+- **Exchanges authorization code for tokens** (NEW)
+- Parses token response and stores tokens securely
 - Grants application access after successful authentication
 - Sets up main UI for authenticated users
 - Supports switching between login methods
@@ -192,7 +194,47 @@ sudo apt update
 sudo apt install libasound2-dev libssl-dev libnss3-dev libdbus-1-dev libxcomposite-dev
 ```
 
-## Next Steps - Token Exchange
+## Token Exchange Implementation (✓ Completed)
+
+The authorization code is now automatically exchanged for tokens after successful login.
+
+### Implementation Details
+
+**Flow**:
+1. User completes login → `onLoginSucceeded()` is called with authorization code
+2. `exchangeAuthCodeForTokens()` sends POST request to token endpoint
+3. Token endpoint returns access_token, refresh_token, and id_token
+4. Tokens are parsed and stored in member variables
+5. Success message displays token information
+6. `grantApplicationAccess()` is called to proceed with application
+
+**Token Exchange Request** (`OIDCConfig::getTokenExchangeBody()`):
+```cpp
+// POST to token endpoint with form data:
+grant_type=authorization_code
+code=<authorization_code>
+redirect_uri=<redirect_uri>
+client_id=<client_id>
+client_secret=<client_secret>
+```
+
+**Token Exchange Response**:
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refresh_token": "abc123def456...",
+  "id_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "Bearer",
+  "expires_in": 3600
+}
+```
+
+**Tokens Stored In**:
+- `MainWindow::m_accessToken` - For API requests
+- `MainWindow::m_refreshToken` - For token renewal
+- `MainWindow::m_idToken` - Contains user identity information
+
+### Next Steps
 
 After receiving tokens (either via SimpleLoginDialog, AuthCodeDialog, or after LoginDialog exchanges code):
 
@@ -201,17 +243,33 @@ After receiving tokens (either via SimpleLoginDialog, AuthCodeDialog, or after L
    // Store access_token, id_token, refresh_token securely
    // Use OS keychain for secure storage
    ```
-
+   
+   - Implement secure storage using OS keychain
+   - Never log tokens to console in production
+   - Encrypt tokens if storing to disk
+   
 2. **Use Access Token for API Requests**:
    ```cpp
-   // Add Authorization header: "Bearer <access_token>"
-   // Make API requests to protected resources
+   QNetworkRequest request(apiUrl);
+   request.setRawHeader("Authorization", 
+       QString("Bearer %1").arg(m_accessToken).toUtf8());
+   m_networkManager->get(request);
    ```
 
 3. **Implement Token Refresh**:
    - Track token expiration
    - Refresh tokens before they expire
    - Handle 401 Unauthorized responses
+
+4. **Token Refresh**:
+   - Monitor token expiration (expires_in field)
+   - Use refresh_token to obtain new access_token before expiry
+   - Implement automatic refresh logic
+
+5. **Logout Functionality**:
+   - Send token revocation request to provider
+   - Clear stored tokens
+   - Close application or show login dialog again
 
 ## Security Considerations
 
@@ -236,9 +294,14 @@ After receiving tokens (either via SimpleLoginDialog, AuthCodeDialog, or after L
 OIDCConfig config;
 config.setAuthorizationUrl("...");
 config.setClientId("...");
+config.setTokenUrl("...");
+config.setClientSecret("...");
 
 // Get authorization URL
 QUrl authUrl = config.getAuthorizationEndpoint();
+
+// Prepare token exchange request body
+QByteArray tokenBody = config.getTokenExchangeBody(authCode);
 ```
 
 ### AuthCodeDialog
